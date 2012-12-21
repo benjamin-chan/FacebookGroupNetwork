@@ -1,5 +1,5 @@
-Facebook running groups network
-===============================
+Running Group Networks
+======================
 Last update by Benjamin Chan (<benjamin.ks.chan@gmail.com>) on `r paste(Sys.time())` using `r R.version.string`.
 
 At the Pre-holiday [fat ass](http://blog.oregonlive.com/runoregon/2009/10/fat_ass_runs_in_oregon_and_sw.html) in Forest Park, December 15, 2012, I said to [Josh Owen](https://www.facebook.com/joshowen) and [Pete Savage](https://www.facebook.com/pete.savage.56) that the fat ass was a conglomeration between the BananaSluggers and the [TrailFactor](http://www.facebook.com/TrailFactor) groups; and that there's a 50-80% overlap between the two groups. I even volunteered to create a network graph of the two groups. Here it is.
@@ -8,7 +8,7 @@ At the Pre-holiday [fat ass](http://blog.oregonlive.com/runoregon/2009/10/fat_as
 Getting Facebook network data
 -----------------------------
 Here are the steps to getting the data from Facebook into a format for R.
-* Use the Facebook app [netvizz](https://apps.facebook.com/netvizz/) to create GDF files for both the BananaSluggers and the TrailFactor friend connections (note, netvizz required many attempts and patience; after a couple of days of attempts it finally produced the GDF files)
+* Use the [netvizz](https://apps.facebook.com/netvizz/) Facebook app to create GDF files for both the BananaSluggers and the TrailFactor friend connections (note, netvizz required many attempts and patience; after a couple of days of attempts it finally produced the GDF files)
 * Use [Gephi](https://gephi.org/) to open the GDF file for the BananaSluggers group
 * Create a boolean column, `GroupBananaSlugger`, indicating BananaSlugger membership
 * Export the revised graph in GEXF format
@@ -18,7 +18,6 @@ Here are the steps to getting the data from Facebook into a format for R.
 * Start a new Gephi project
 * First open the BananaSlugger GEXF graph
 * Next, open the TrailFactor GEXF graph, but use the *Append Graph* option instead of the New Graph option
-* Merge the boolean columns for group membership using *And* to create the boolean column `GroupOverlap` to indicate which nodes are in both groups
 * Export the graph to GML format
 
 There's probably a way to get around using Gephi but I'm not sure if igraph, or some other SNA package, can merge two graphs.
@@ -33,7 +32,7 @@ require(RColorBrewer, quietly=TRUE)
 ```
 
 ```{r ReadGraph}
-G <- read.graph(file="GroupRunning.gml", format="gml")
+G <- read.graph(file="BananaSluggersTrailFactor.gml", format="gml")
 ```
 There are `r vcount(G)` nodes and `r ecount(G)` edges.
 
@@ -66,17 +65,18 @@ grpTF[is.na(grpTF)] <- FALSE
 Create a factor for group membership and add to the data frame.
 ```{r CreateMembershipDataFrame}
 group <- rep(NA, length(label))
-group[!grpBS &  grpTF] <- 1
-group[ grpBS & !grpTF] <- 2
-group[ grpBS &  grpTF] <- 3
-group <- factor(group, labels=c("TF", "BS", "BS+TF"))
+group[ grpBS & !grpTF] <- "BS"
+group[!grpBS &  grpTF] <- "TF"
+group[ grpBS &  grpTF] <- "BS+TF"
+group <- factor(group)
 df <- data.frame(df, group)
 ```
 Display the group membership totals.
-```{r MembershipTable, results='asis'}
-print(xtable(table(df$group)), type="html")
+```{r MembershipTable}
+t <- table(df$group)
+t
 ```
-`r format(sum(df$group == "BS+TF") / length(df$group) * 100, digits=2)`% of the nodes are in both groups.
+`r format(t["BS+TF"] / sum(t) * 100, digits=2)`% of the nodes are in both groups.
 
 
 Centrality
@@ -108,11 +108,10 @@ Again, I don't want to focus on closeness centrality since it's not really what 
 
 Calculate **betweenness** centrality. Betweenness is a measure of how often a node is in the pathway between two other nodes. I.e., a person with high betweenness can be a key player in introducing a large group of friends to another large group of friends. Such a person doesn't necessarily have to have a large number of friends themselves. But they could be in a unique position of influence in the network.
 
-Plot a histogram of betweenness scores. 
-```{r Betweenness, fig.height=4}
+Summarize the betweenness scores. 
+```{r Betweenness}
 btwn <- betweenness(G)
 summary(btwn)
-qplot(btwn, binwidth=1000)
 ```
 The absolute value of the scores don't mean much. But their relative values tell the story. List the top 5% of people with the highest betweeness scores.
 ```{r HighBetweenness, results='asis'}
@@ -151,24 +150,52 @@ Scale the size of a node's plotting symbol according to its betweenness centrali
 q <- quantile(btwn, probs=c(0, 0.95, 0.98, 0.99, 1))
 size <- cut(btwn, breaks=q, include.lowest=TRUE, dig.lab=5)
 summary(size)
-V(G)$size <- unclass(size)
+V(G)$size <- unclass(size) + 1
 # V(G)$size <- 1
 ```
 
-Plot the network and color-code the communities.
-```{r NetworkVisualization, fig.height=20, fig.width=20}
+Plot the network and color-code the groups.
+```{r NetworkVisualization, fig.height=10, fig.width=10}
 n <- nlevels(df$group)
-palette <- brewer.pal(n, "RdYlBu")
-V(G)$color[group ==    "TF"] <- palette[1]
+palette <- brewer.pal(n, "Spectral")
 V(G)$color[group == "BS"   ] <- palette[2]
+V(G)$color[group ==    "TF"] <- palette[1]
 V(G)$color[group == "BS+TF"] <- palette[3]
-plot(G, main="BananaSluggers + TrailFactor Facebook network", 
+title <- paste("BananaSluggers + TrailFactor", "Facebook Network", sep="\n")
+plot(G, 
+     main=title,
+     vertex.label=NA, 
+     vertex.label.color="black", 
+     vertex.label.dist=0.5, 
+     vertex.label.family="sans", 
+     vertex.frame.color="gray",
+     edge.color="lightgray",
+     edge.curved=TRUE,
+     )
+```
+
+Whoa! That's a pretty intense network graph. Let's prune it a bit and only show the runners with high degree.
+```{r PruneGraph}
+p <- 75
+cutoff <- quantile(deg, p / 100)
+drop <- deg < cutoff
+G <- delete.vertices(G, drop)
+topnodes <- topnodes[!drop]
+group <- group[!drop]
+V(G)$size <- unclass(size[!drop]) + 1
+```
+Plot runners in the top `r 100 - p`% in terms of degree. I.e., nodes with degree > `r format(cutoff, digits=4)`.
+```{r NetworkVisualizationPruned, fig.height=15, fig.width=15}
+subtitle <- paste("Members with degree \u2265 ", format(cutoff, digits=4), " (", p, "th percentile)", sep="")
+title <- paste(title, subtitle, sep="\n")
+plot(G, 
+     main=title,
      vertex.label=topnodes, 
      vertex.label.color="black", 
-#      vertex.label.dist=0.5, 
+     vertex.label.dist=0.5, 
      vertex.label.family="sans", 
-     vertex.frame.color="lightgray",
-     mark.groups=group, 
-     mark.col=NA
+     vertex.frame.color="gray",
+     edge.color="lightgray",
+     edge.curved=T
      )
 ```
