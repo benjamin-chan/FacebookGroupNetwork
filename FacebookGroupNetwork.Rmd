@@ -1,0 +1,174 @@
+Facebook running groups network
+===============================
+Last update by Benjamin Chan (<benjamin.ks.chan@gmail.com>) on `r paste(Sys.time())` using `r R.version.string`.
+
+At the Pre-holiday [fat ass](http://blog.oregonlive.com/runoregon/2009/10/fat_ass_runs_in_oregon_and_sw.html) in Forest Park, December 15, 2012, I said to [Josh Owen](https://www.facebook.com/joshowen) and [Pete Savage](https://www.facebook.com/pete.savage.56) that the fat ass was a conglomeration between the BananaSluggers and the [TrailFactor](http://www.facebook.com/TrailFactor) groups; and that there's a 50-80% overlap between the two groups. I even volunteered to create a network graph of the two groups. Here it is.
+
+
+Getting Facebook network data
+-----------------------------
+Here are the steps to getting the data from Facebook into a format for R.
+* Use the Facebook app [netvizz](https://apps.facebook.com/netvizz/) to create GDF files for both the BananaSluggers and the TrailFactor friend connections (note, netvizz required many attempts and patience; after a couple of days of attempts it finally produced the GDF files)
+* Use [Gephi](https://gephi.org/) to open the GDF file for the BananaSluggers group
+* Create a boolean column, `GroupBananaSlugger`, indicating BananaSlugger membership
+* Export the revised graph in GEXF format
+* Use [Gephi](https://gephi.org/) to open the GDF file for the TrailFactor group
+* Create a boolean column, `GroupTrailFactor`, indicating TrailFactor membership
+* Export the revised graph in GEXF format
+* Start a new Gephi project
+* First open the BananaSlugger GEXF graph
+* Next, open the TrailFactor GEXF graph, but use the *Append Graph* option instead of the New Graph option
+* Merge the boolean columns for group membership using *And* to create the boolean column `GroupOverlap` to indicate which nodes are in both groups
+* Export the graph to GML format
+
+There's probably a way to get around using Gephi but I'm not sure if igraph, or some other SNA package, can merge two graphs.
+
+
+Load required packages.
+```{r LoadPackages}
+require(igraph, quietly=TRUE)
+require(ggplot2, quietly=TRUE)
+require(xtable, quietly=TRUE)
+require(RColorBrewer, quietly=TRUE)
+```
+
+```{r ReadGraph}
+G <- read.graph(file="GroupRunning.gml", format="gml")
+```
+There are `r vcount(G)` nodes and `r ecount(G)` edges.
+
+Create first name and initials vectors from names. I'll want to use these to label nodes when plotting the network.
+```{r NodeLabels}
+listName <- strsplit(V(G)$label, " ")
+nameF <- sapply(listName, head, 1)
+nameL <- sapply(listName, tail, 1)
+label <- nameF
+df <- data.frame(nameF, nameL)
+```
+
+
+Analysis questions
+------------------
+I'm interested in the following questions
+* What is the magnitude of the overlap of BananaSluggers and TrailFactor?
+* Who are the key people in the combined network?
+
+
+Overlap of both groups
+----------------------
+Create logical vectors for group membership.
+```{r GroupMembership}
+grpBS <- as.logical(V(G)$GroupBananaSluggers)
+grpBS[is.na(grpBS)] <- FALSE
+grpTF <- as.logical(V(G)$GroupTrailFactor)
+grpTF[is.na(grpTF)] <- FALSE
+```
+Create a factor for group membership and add to the data frame.
+```{r CreateMembershipDataFrame}
+group <- rep(NA, length(label))
+group[!grpBS &  grpTF] <- 1
+group[ grpBS & !grpTF] <- 2
+group[ grpBS &  grpTF] <- 3
+group <- factor(group, labels=c("TF", "BS", "BS+TF"))
+df <- data.frame(df, group)
+```
+Display the group membership totals.
+```{r MembershipTable, results='asis'}
+print(xtable(table(df$group)), type="html")
+```
+`r format(sum(df$group == "BS+TF") / length(df$group) * 100, digits=2)`% of the nodes are in both groups.
+
+
+Centrality
+----------
+Here's a link to [Wikipedia](http://en.wikipedia.org/wiki/Centrality) for some background information on centrality.
+
+Calculate **degree** centrality. This ends up not being too useful. Degree is really just a measure of how connected someone is. In Facebook terms, it's who has the most friends within the BS+TF network.
+```{r Degree}
+deg <- degree(G)
+summary(deg)
+```
+The median degree, or number of friends, was `r median(deg)`. The highest number of friends a person in the BS+TF network has was `r max(deg)`.
+
+Even though I don't want to focus on degree centrality, let's see who are the most connected people in the BS+TF network.
+```{r HighDegree, results='asis'}
+lim <- sort(deg, decreasing=TRUE)[round(vcount(G) * 0.05)]
+top <- data.frame("Name"=V(G)$label, "Group"=group, "Degree"=deg)
+top <- subset(top, deg >= lim)
+top <- top[order(top$Degree, decreasing=TRUE),]
+print(xtable(top, digits=0), type="html", include.rownames=FALSE)
+```
+
+Calculate **closeness** centrality. Closeness is a measure of how many steps are required to access every other node. It's a measure of how close a node is to all the action. A person with high closeness, however, doesn't necessarily have to have very many friends or be in between relationship.
+```{r Closeness}
+close <- closeness(G)
+summary(close)
+```
+Again, I don't want to focus on closeness centrality since it's not really what I'm after in this analysis, so I won't say anything more about it.
+
+Calculate **betweenness** centrality. Betweenness is a measure of how often a node is in the pathway between two other nodes. I.e., a person with high betweenness can be a key player in introducing a large group of friends to another large group of friends. Such a person doesn't necessarily have to have a large number of friends themselves. But they could be in a unique position of influence in the network.
+
+Plot a histogram of betweenness scores. 
+```{r Betweenness, fig.height=4}
+btwn <- betweenness(G)
+summary(btwn)
+qplot(btwn, binwidth=1000)
+```
+The absolute value of the scores don't mean much. But their relative values tell the story. List the top 5% of people with the highest betweeness scores.
+```{r HighBetweenness, results='asis'}
+lim <- sort(btwn, decreasing=TRUE)[round(vcount(G) * 0.05)]
+top <- data.frame("Name"=V(G)$label, "Group"=group, "Betweenness"=btwn)
+top <- subset(top, btwn >= lim)
+top <- top[order(top$Betweenness, decreasing=TRUE),]
+print(xtable(top, digits=0), type="html", include.rownames=FALSE)
+```
+
+Plot the association between degree centrality and betweenness centrality. See if there are any highly influential people (betweenness) who also have a high number of friends (degree).
+```{r AssociationCentrality}
+rsq <- format(cor(deg, btwn) ^2, digits=3)
+cntrl <- data.frame(deg, btwn, close)
+xlab <- mean(c(min(cntrl$deg), max(cntrl$deg)))
+ylab <- mean(c(min(cntrl$btwn), max(cntrl$btwn)))
+ggplot(cntrl, aes(x=deg, y=btwn)) +
+  geom_jitter(alpha=1/2) +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(x="Degree", y="Betweenness") +
+  annotate("text", label=paste("R-sq =", rsq), x=xlab, y=log(ylab))
+```
+
+
+**NEED TO EDIT**
+Visualize the network
+---------------------
+Label the nodes with high betweenness centrality.
+```{r SubsetLabels}
+topnodes <- nameF
+topnodes[btwn < lim] <- NA
+```
+Scale the size of a node's plotting symbol according to its betweenness centrality score. Scaling is by percentile (95%, 98%, 99%).
+```{r ScaleSymbol}
+q <- quantile(btwn, probs=c(0, 0.95, 0.98, 0.99, 1))
+size <- cut(btwn, breaks=q, include.lowest=TRUE, dig.lab=5)
+summary(size)
+V(G)$size <- unclass(size)
+# V(G)$size <- 1
+```
+
+Plot the network and color-code the communities.
+```{r NetworkVisualization, fig.height=20, fig.width=20}
+n <- nlevels(df$group)
+palette <- brewer.pal(n, "RdYlBu")
+V(G)$color[group ==    "TF"] <- palette[1]
+V(G)$color[group == "BS"   ] <- palette[2]
+V(G)$color[group == "BS+TF"] <- palette[3]
+plot(G, main="BananaSluggers + TrailFactor Facebook network", 
+     vertex.label=topnodes, 
+     vertex.label.color="black", 
+#      vertex.label.dist=0.5, 
+     vertex.label.family="sans", 
+     vertex.frame.color="lightgray",
+     mark.groups=group, 
+     mark.col=NA
+     )
+```
